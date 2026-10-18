@@ -6,7 +6,7 @@ import com.fasterxml.uuid.impl.TimeBasedEpochGenerator;
 
 import java.util.UUID;
 
-public class Uuidv7Generator implements IdGenerator {
+public class UuidV7Generator implements IdGenerator {
 
     private final TimeBasedEpochGenerator generator = Generators.timeBasedEpochGenerator();
 

@@ -5,6 +5,7 @@ import com.coffeeshop.orderservice.domain.common.OrderStatus;
 import com.coffeeshop.orderservice.domain.common.Role;
 import com.coffeeshop.orderservice.domain.common.Station;
 import com.coffeeshop.orderservice.domain.exception.InvalidOrderException;
+import com.coffeeshop.orderservice.domain.exception.InvalidOrderStateTransitionException;
 import com.coffeeshop.orderservice.domain.exception.OrderAccessDeniedException;
 import com.coffeeshop.orderservice.domain.valueobject.Actor;
 import com.coffeeshop.orderservice.domain.valueobject.OrderItem;
@@ -48,7 +49,7 @@ class OrderTest {
         );
     }
 
-    private static Order newCustomOrder(){
+    private static Order newCustomerOrder(){
         return Order.placeByCustomer(UUID.randomUUID(), CUSTOMER_A, sampleItems(), CLOCK);
     }
 
@@ -65,7 +66,7 @@ class OrderTest {
 
         @Test
         void customer_order_is_owned_by_that_customer(){
-            Order order = newCustomOrder();
+            Order order = newCustomerOrder();
             assertThat(order.status()).isEqualTo(OrderStatus.CREATED);
             assertThat(order.isOwnedBy(CUSTOMER_A.userId())).isTrue();
             assertThat(order.createdBy()).isEqualTo(CUSTOMER_A.userId());
@@ -152,4 +153,62 @@ class OrderTest {
                     .isInstanceOf(InvalidOrderStateTransitionException.class);
         }
     }
+
+    // ---------------------------------------------------------
+    // Siklus hidup order
+    // ---------------------------------------------------------
+
+    @Nested
+    class Lifecycle {
+
+        @Test
+        void happy_path_until_completed() {
+            Order order = newCustomerOrder();
+
+            order.startPreparation(CLOCK);
+            order.markReady(CLOCK);
+            order.complete(WAITER, CLOCK);
+
+            assertThat(order.status()).isEqualTo(OrderStatus.COMPLETED);
+            assertThat(order.status().isFinal()).isTrue();
+        }
+
+        @Test
+        void system_transitions_are_idempotent() {
+            Order order = newCustomerOrder();
+
+            order.startPreparation(CLOCK);
+            order.startPreparation(CLOCK);
+
+            assertThat(order.status()).isEqualTo(OrderStatus.IN_PREPARATION);
+        }
+
+        @Test
+        void cannot_jump_from_created_to_ready() {
+            Order order = newCustomerOrder();
+
+            assertThatThrownBy(() -> order.markReady(CLOCK))
+                    .isInstanceOf(InvalidOrderStateTransitionException.class);
+        }
+
+        @Test
+        void cannot_complete_before_ready() {
+            Order order = newCustomerOrder();
+            order.startPreparation(CLOCK);
+
+            assertThatThrownBy(() -> order.complete(WAITER, CLOCK))
+                    .isInstanceOf(InvalidOrderStateTransitionException.class);
+        }
+
+        @Test
+        void barista_cannot_complete_order() {
+            Order order = newCustomerOrder();
+            order.startPreparation(CLOCK);
+            order.markReady(CLOCK);
+
+            assertThatThrownBy(() -> order.complete(BARISTA, CLOCK))
+                    .isInstanceOf(OrderAccessDeniedException.class);
+        }
+    }
 }
+
