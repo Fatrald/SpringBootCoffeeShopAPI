@@ -1,7 +1,7 @@
-package com.coffeeshop.orderservice.domain.valueobject;
+package com.coffeeshop.orderservice.order;
 
-import com.coffeeshop.orderservice.domain.aggregate.Order;
-import com.coffeeshop.orderservice.domain.common.Role;
+import com.coffeeshop.orderservice.domain.actor.Actor;
+import com.coffeeshop.orderservice.domain.actor.Role;
 
 public final class OrderPolicy {
     private OrderPolicy(){

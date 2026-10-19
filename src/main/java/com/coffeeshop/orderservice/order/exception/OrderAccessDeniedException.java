@@ -1,4 +1,4 @@
-package com.coffeeshop.orderservice.domain.exception;
+package com.coffeeshop.orderservice.order.exception;
 
 public class OrderAccessDeniedException extends OrderDomainException {
 

@@ -1,4 +1,4 @@
-package com.coffeeshop.orderservice.domain.common;
+package com.coffeeshop.orderservice.domain.actor;
 
 import java.util.Arrays;
 import java.util.Optional;

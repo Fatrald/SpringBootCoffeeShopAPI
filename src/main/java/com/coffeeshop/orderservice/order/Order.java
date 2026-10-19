@@ -1,12 +1,9 @@
-package com.coffeeshop.orderservice.domain.aggregate;
+package com.coffeeshop.orderservice.order;
 
-import com.coffeeshop.orderservice.domain.valueobject.Actor;
-import com.coffeeshop.orderservice.domain.valueobject.OrderItem;
-import com.coffeeshop.orderservice.domain.valueobject.OrderPolicy;
-import com.coffeeshop.orderservice.domain.common.OrderStatus;
-import com.coffeeshop.orderservice.domain.exception.InvalidOrderException;
-import com.coffeeshop.orderservice.domain.exception.InvalidOrderStateTransitionException;
-import com.coffeeshop.orderservice.domain.exception.OrderAccessDeniedException;
+import com.coffeeshop.orderservice.domain.actor.Actor;
+import com.coffeeshop.orderservice.order.exception.InvalidOrderException;
+import com.coffeeshop.orderservice.order.exception.InvalidOrderStateTransitionException;
+import com.coffeeshop.orderservice.order.exception.OrderAccessDeniedException;
 
 import java.math.BigDecimal;
 import java.time.Instant;

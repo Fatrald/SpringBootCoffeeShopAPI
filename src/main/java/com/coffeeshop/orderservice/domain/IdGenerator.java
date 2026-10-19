@@ -1,4 +1,4 @@
-package com.coffeeshop.orderservice.domain.utils;
+package com.coffeeshop.orderservice.domain;
 
 import java.util.UUID;
 

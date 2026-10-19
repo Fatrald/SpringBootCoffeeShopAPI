@@ -1,8 +1,8 @@
-package com.coffeeshop.orderservice.domain.exception;
-
-import com.coffeeshop.orderservice.domain.common.OrderStatus;
+package com.coffeeshop.orderservice.order.exception;
 
 import java.util.UUID;
+
+import com.coffeeshop.orderservice.order.OrderStatus;
 
 public class InvalidOrderStateTransitionException extends OrderDomainException {
     private final UUID orderId;

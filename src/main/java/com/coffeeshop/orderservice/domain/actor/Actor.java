@@ -1,6 +1,4 @@
-package com.coffeeshop.orderservice.domain.valueobject;
-
-import com.coffeeshop.orderservice.domain.common.Role;
+package com.coffeeshop.orderservice.domain.actor;
 
 import java.util.Objects;
 import java.util.Set;

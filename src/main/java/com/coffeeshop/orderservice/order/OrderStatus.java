@@ -1,4 +1,4 @@
-package com.coffeeshop.orderservice.domain.common;
+package com.coffeeshop.orderservice.order;
 
 public enum OrderStatus {
     CREATED,

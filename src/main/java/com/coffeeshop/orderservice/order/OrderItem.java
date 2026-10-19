@@ -1,10 +1,9 @@
-package com.coffeeshop.orderservice.domain.valueobject;
-
-import com.coffeeshop.orderservice.domain.common.Station;
-import com.coffeeshop.orderservice.domain.exception.InvalidOrderException;
+package com.coffeeshop.orderservice.order;
 
 import java.math.BigDecimal;
 import java.util.UUID;
+
+import com.coffeeshop.orderservice.order.exception.InvalidOrderException;
 
 public record OrderItem(
         UUID menuId,
