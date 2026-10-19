@@ -1,0 +1,153 @@
+# =====================================================================
+# CoffeeShop - Infrastruktur Development
+#
+# Jalankan dari folder infra/:
+#   cp .env.example .env      (lalu isi password)
+#   docker compose up -d
+#
+# Semua port hanya dibuka ke 127.0.0.1 (laptop Anda sendiri),
+# tidak bisa diakses dari komputer lain di jaringan yang sama.
+# =====================================================================
+name: coffeeshop
+
+services:
+
+  # -------------------------------------------------------------------
+  # PostgreSQL: satu instance, satu database "coffeeshop",
+  # satu schema + satu user per service, plus database "keycloak".
+  # -------------------------------------------------------------------
+  postgres:
+    image: postgres:18
+    container_name: coffeeshop-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:?isi POSTGRES_SUPERUSER di .env}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?isi POSTGRES_SUPERUSER_PASSWORD di .env}
+      POSTGRES_DB: coffeeshop
+      # Dibaca oleh script di ./postgres/init saat database pertama kali dibuat
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?isi KEYCLOAK_DB_PASSWORD di .env}
+      MENU_DB_PASSWORD: ${MENU_DB_PASSWORD:?isi MENU_DB_PASSWORD di .env}
+      ORDER_DB_PASSWORD: ${ORDER_DB_PASSWORD:?isi ORDER_DB_PASSWORD di .env}
+      PREPARATION_DB_PASSWORD: ${PREPARATION_DB_PASSWORD:?isi PREPARATION_DB_PASSWORD di .env}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:?isi NOTIFICATION_DB_PASSWORD di .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # Mulai PostgreSQL 18, image resmi menyimpan data di bawah /var/lib/postgresql
+      - postgres-data:/var/lib/postgresql
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d coffeeshop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # -------------------------------------------------------------------
+  # Redis: Idempotency-Key, cache, counter rate limit
+  # -------------------------------------------------------------------
+  redis:
+    image: redis:8-alpine
+    container_name: coffeeshop-redis
+    command:
+      - sh
+      - -c
+      - exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?isi REDIS_PASSWORD di .env}
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # -------------------------------------------------------------------
+  # RabbitMQ: messaging antar service
+  # UI management: http://localhost:15672
+  # -------------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:4.2-management
+    container_name: coffeeshop-rabbitmq
+    # Hostname wajib tetap: RabbitMQ menyimpan data berdasarkan nama node.
+    # Jika hostname berubah, data lama di volume tidak terbaca.
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?isi RABBITMQ_USER di .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?isi RABBITMQ_PASSWORD di .env}
+      RABBITMQ_DEFAULT_VHOST: coffeeshop
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # -------------------------------------------------------------------
+  # Keycloak: autentikasi & otorisasi
+  # Admin console: http://keycloak:8080/admin
+  # (butuh baris "127.0.0.1 keycloak" di /etc/hosts)
+  # -------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.1
+    container_name: coffeeshop-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:?isi KEYCLOAK_ADMIN_USER di .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?isi KEYCLOAK_ADMIN_PASSWORD di .env}
+      # Issuer token selalu "http://keycloak:8080/realms/coffeeshop",
+      # baik token diminta dari laptop maupun dari dalam container.
+      KC_HOSTNAME: http://keycloak:8080
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # File realm (*.json) di folder ini otomatis di-import saat start (Step 4)
+      - ./keycloak/import:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Image Keycloak tidak punya curl, jadi memakai fitur /dev/tcp milik bash.
+      # Endpoint health ada di management port 9000.
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000 &&
+          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q '"UP"' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+
+  # -------------------------------------------------------------------
+  # Observability all-in-one (khusus development):
+  # OpenTelemetry Collector + Prometheus + Loki + Tempo + Grafana
+  # Grafana: http://localhost:3000
+  # -------------------------------------------------------------------
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    container_name: coffeeshop-otel-lgtm
+    ports:
+      - "127.0.0.1:3000:3000"   # Grafana
+      - "127.0.0.1:4317:4317"   # OTLP gRPC
+      - "127.0.0.1:4318:4318"   # OTLP HTTP
+
+volumes:
+  postgres-data:
+  redis-data:
+  rabbitmq-data:

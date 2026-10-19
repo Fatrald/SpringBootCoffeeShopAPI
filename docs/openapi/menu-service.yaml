@@ -1,0 +1,814 @@
+openapi: 3.1.0
+
+info:
+  title: CoffeeShop Menu Service API
+  version: 1.0.0
+  description: |
+    API untuk mengelola kategori dan menu di CoffeeShop.
+
+    **Autentikasi:** semua endpoint membutuhkan JWT dari Keycloak realm `coffeeshop`.
+
+    **Format standar:**
+    - ID: UUID v7
+    - Tanggal: ISO 8601 UTC
+    - Uang: decimal sebagai string
+    - Error: RFC 9457 Problem Details
+
+    **Aturan penting:**
+    - Station (`BAR` / `KITCHEN`) ditentukan oleh kategori. Menu mewarisi station dari kategorinya.
+    - Menu yang dihapus memakai soft delete: tidak muncul di daftar dan `GET` mengembalikan 404.
+    - Nama kategori dan nama menu harus unik (tidak membedakan huruf besar/kecil).
+
+    **Rate limit:** diterapkan di API Gateway. Jika terlampaui, gateway
+    mengembalikan `429 Too Many Requests` dengan header `Retry-After`.
+
+servers:
+  - url: https://api.coffeeshop.local
+    description: Melalui API Gateway (APISIX)
+  - url: http://localhost:8081
+    description: Langsung ke service (development)
+
+tags:
+  - name: Categories
+    description: Kategori menu dan station tempat menu disiapkan
+  - name: Menus
+    description: Menu, harga, dan ketersediaan
+
+security:
+  - bearerAuth: []
+
+# =====================================================================
+# PATHS
+# =====================================================================
+paths:
+
+  # -------------------------------------------------------------------
+  # Categories
+  # -------------------------------------------------------------------
+  /v1/categories:
+    get:
+      tags: [Categories]
+      operationId: listCategories
+      summary: Melihat semua kategori
+      description: |
+        **Role:** `customer`, `waiter`, `barista`, `chef`, `admin`
+
+        Jumlah kategori sedikit, sehingga tidak memakai pagination.
+      responses:
+        '200':
+          description: Daftar kategori
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags: [Categories]
+      operationId: createCategory
+      summary: Membuat kategori
+      description: |
+        **Role:** `admin`
+
+        Tidak memakai `Idempotency-Key`: jika request terkirim dua kali,
+        request kedua ditolak dengan 409 karena nama kategori harus unik.
+      requestBody:
+        $ref: '#/components/requestBodies/CategoryRequest'
+      responses:
+        '201':
+          $ref: '#/components/responses/CategoryCreated'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/CategoryNameConflict'
+
+  /v1/categories/{categoryId}:
+    parameters:
+      - $ref: '#/components/parameters/CategoryId'
+    put:
+      tags: [Categories]
+      operationId: updateCategory
+      summary: Mengubah kategori
+      description: |
+        **Role:** `admin`
+      requestBody:
+        $ref: '#/components/requestBodies/CategoryRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/CategoryOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/CategoryNotFound'
+        '409':
+          $ref: '#/components/responses/CategoryNameConflict'
+
+    delete:
+      tags: [Categories]
+      operationId: deleteCategory
+      summary: Menghapus kategori
+      description: |
+        **Role:** `admin`
+
+        Kategori yang masih memiliki menu aktif tidak bisa dihapus (409).
+        Hapus atau pindahkan menunya terlebih dahulu.
+      responses:
+        '204':
+          description: Kategori berhasil dihapus
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/CategoryNotFound'
+        '409':
+          $ref: '#/components/responses/CategoryNotEmpty'
+
+  # -------------------------------------------------------------------
+  # Menus
+  # -------------------------------------------------------------------
+  /v1/menus:
+    get:
+      tags: [Menus]
+      operationId: listMenus
+      summary: Melihat daftar menu
+      description: |
+        **Role:** `customer`, `waiter`, `barista`, `chef`, `admin`
+
+        Menu yang sudah dihapus (soft delete) tidak ditampilkan.
+      parameters:
+        - $ref: '#/components/parameters/CategoryFilter'
+        - $ref: '#/components/parameters/StationFilter'
+        - $ref: '#/components/parameters/AvailabilityFilter'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/MenuSort'
+      responses:
+        '200':
+          description: Daftar menu
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MenuPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags: [Menus]
+      operationId: createMenu
+      summary: Membuat menu
+      description: |
+        **Role:** `admin`
+
+        Menu baru otomatis berstatus tersedia (`isAvailable: true`).
+        Ketersediaan diubah lewat endpoint `/availability`.
+      requestBody:
+        $ref: '#/components/requestBodies/MenuRequest'
+      responses:
+        '201':
+          $ref: '#/components/responses/MenuCreated'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/MenuNameConflict'
+        '422':
+          $ref: '#/components/responses/UnknownCategory'
+
+  /v1/menus/{menuId}:
+    parameters:
+      - $ref: '#/components/parameters/MenuId'
+    get:
+      tags: [Menus]
+      operationId: getMenu
+      summary: Melihat detail menu
+      description: |
+        **Role:** `customer`, `waiter`, `barista`, `chef`, `admin`
+
+        Dipanggil juga oleh order-service (dengan token user yang diteruskan)
+        untuk mengambil harga saat order dibuat. Menu yang sudah dihapus
+        mengembalikan 404.
+      responses:
+        '200':
+          $ref: '#/components/responses/MenuOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/MenuNotFound'
+
+    put:
+      tags: [Menus]
+      operationId: updateMenu
+      summary: Mengubah menu
+      description: |
+        **Role:** `admin`
+
+        Mengganti seluruh data menu. `isAvailable` tidak ikut diubah di sini.
+        Perubahan harga tidak memengaruhi order lama, karena order menyimpan
+        snapshot harga.
+      requestBody:
+        $ref: '#/components/requestBodies/MenuRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/MenuOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/MenuNotFound'
+        '409':
+          $ref: '#/components/responses/MenuNameConflict'
+        '422':
+          $ref: '#/components/responses/UnknownCategory'
+
+    delete:
+      tags: [Menus]
+      operationId: deleteMenu
+      summary: Menghapus menu (soft delete)
+      description: |
+        **Role:** `admin`
+
+        Data menu tidak benar-benar dihapus dari database, hanya ditandai
+        terhapus. Menghapus menu yang sudah terhapus mengembalikan 404.
+      responses:
+        '204':
+          description: Menu berhasil dihapus
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/MenuNotFound'
+
+  /v1/menus/{menuId}/availability:
+    parameters:
+      - $ref: '#/components/parameters/MenuId'
+    patch:
+      tags: [Menus]
+      operationId: updateMenuAvailability
+      summary: Mengubah ketersediaan menu
+      description: |
+        **Role:**
+        - `admin`: semua menu
+        - `barista`: hanya menu dengan station `BAR`
+        - `chef`: hanya menu dengan station `KITCHEN`
+
+        Barista yang mengubah menu `KITCHEN` (atau chef yang mengubah menu `BAR`)
+        mendapat **403**, karena ini masalah hak akses, bukan masalah isi request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AvailabilityRequest'
+            example:
+              isAvailable: false
+      responses:
+        '200':
+          $ref: '#/components/responses/MenuOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/MenuNotFound'
+
+# =====================================================================
+# COMPONENTS
+# =====================================================================
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token dari Keycloak realm `coffeeshop`
+
+  # -------------------------------------------------------------------
+  # Parameters
+  # -------------------------------------------------------------------
+  parameters:
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      description: ID kategori (UUID v7)
+      schema:
+        type: string
+        format: uuid
+      example: '0199f3a0-0000-7000-8000-000000000001'
+
+    MenuId:
+      name: menuId
+      in: path
+      required: true
+      description: ID menu (UUID v7)
+      schema:
+        type: string
+        format: uuid
+      example: '0199f3a2-0000-7000-8000-000000000101'
+
+    CategoryFilter:
+      name: categoryId
+      in: query
+      required: false
+      description: Filter berdasarkan kategori
+      schema:
+        type: string
+        format: uuid
+
+    StationFilter:
+      name: station
+      in: query
+      required: false
+      description: Filter berdasarkan station
+      schema:
+        $ref: '#/components/schemas/Station'
+
+    AvailabilityFilter:
+      name: isAvailable
+      in: query
+      required: false
+      description: Filter berdasarkan ketersediaan
+      schema:
+        type: boolean
+
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Nomor halaman, dimulai dari 0
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Jumlah data per halaman
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    MenuSort:
+      name: sort
+      in: query
+      required: false
+      description: Urutan data dengan format `field,arah`
+      schema:
+        type: string
+        enum: ['menuName,asc', 'menuName,desc', 'createdAt,desc', 'createdAt,asc']
+        default: 'menuName,asc'
+
+  # -------------------------------------------------------------------
+  # Request bodies
+  # -------------------------------------------------------------------
+  requestBodies:
+    CategoryRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CategoryRequest'
+          example:
+            categoryName: Kopi
+            station: BAR
+
+    MenuRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MenuRequest'
+          example:
+            categoryId: '0199f3a0-0000-7000-8000-000000000001'
+            menuName: Caffe Latte
+            description: Espresso dengan susu steamed
+            price: { amount: '35000.00', currency: IDR }
+
+  # -------------------------------------------------------------------
+  # Schemas
+  # -------------------------------------------------------------------
+  schemas:
+
+    CategoryRequest:
+      type: object
+      additionalProperties: false
+      required: [categoryName, station]
+      properties:
+        categoryName:
+          type: string
+          minLength: 1
+          maxLength: 50
+        station:
+          $ref: '#/components/schemas/Station'
+
+    Category:
+      type: object
+      required: [categoryId, categoryName, station, createdAt, updatedAt]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        categoryName:
+          type: string
+        station:
+          $ref: '#/components/schemas/Station'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        categoryId: '0199f3a0-0000-7000-8000-000000000001'
+        categoryName: Kopi
+        station: BAR
+        createdAt: '2026-10-19T08:00:00Z'
+        updatedAt: '2026-10-19T08:00:00Z'
+
+    CategoryList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Category'
+
+    MenuRequest:
+      type: object
+      additionalProperties: false
+      required: [categoryId, menuName, price]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        menuName:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, 'null']
+          maxLength: 500
+        price:
+          $ref: '#/components/schemas/Money'
+
+    Menu:
+      type: object
+      required: [menuId, categoryId, categoryName, station, menuName, description, price, isAvailable, createdAt, updatedAt]
+      properties:
+        menuId:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        categoryName:
+          type: string
+        station:
+          $ref: '#/components/schemas/Station'
+        menuName:
+          type: string
+        description:
+          type: [string, 'null']
+        price:
+          $ref: '#/components/schemas/Money'
+        isAvailable:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        menuId: '0199f3a2-0000-7000-8000-000000000101'
+        categoryId: '0199f3a0-0000-7000-8000-000000000001'
+        categoryName: Kopi
+        station: BAR
+        menuName: Caffe Latte
+        description: Espresso dengan susu steamed
+        price: { amount: '35000.00', currency: IDR }
+        isAvailable: true
+        createdAt: '2026-10-19T08:00:00Z'
+        updatedAt: '2026-10-19T08:00:00Z'
+
+    AvailabilityRequest:
+      type: object
+      additionalProperties: false
+      required: [isAvailable]
+      properties:
+        isAvailable:
+          type: boolean
+
+    MenuPage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Menu'
+        page:
+          $ref: '#/components/schemas/PageMetadata'
+
+    Station:
+      type: string
+      enum: [BAR, KITCHEN]
+
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          pattern: '^\d+\.\d{2}$'
+          description: Decimal sebagai string untuk menghindari kesalahan pembulatan
+          example: '35000.00'
+        currency:
+          type: string
+          enum: [IDR]
+
+    PageMetadata:
+      type: object
+      required: [number, size, totalElements, totalPages]
+      properties:
+        number:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          example: 57
+        totalPages:
+          type: integer
+          example: 3
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Identitas error yang stabil. Klien boleh membuat logika berdasarkan field ini.
+        title:
+          type: string
+          description: Ringkasan singkat untuk manusia
+        status:
+          type: integer
+        detail:
+          type: string
+          description: Penjelasan spesifik untuk kejadian ini
+        instance:
+          type: string
+          format: uri-reference
+        traceId:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+
+    ValidationProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                required: [pointer, detail]
+                properties:
+                  pointer:
+                    type: string
+                    description: Lokasi field yang salah (JSON Pointer, RFC 6901)
+                    example: '#/price/amount'
+                  detail:
+                    type: string
+                    example: harus berformat angka dengan 2 desimal
+
+  # -------------------------------------------------------------------
+  # Responses
+  # -------------------------------------------------------------------
+  responses:
+
+    CategoryCreated:
+      description: Kategori berhasil dibuat
+      headers:
+        Location:
+          description: URL kategori yang baru dibuat
+          schema:
+            type: string
+            format: uri-reference
+          example: /v1/categories/0199f3a0-0000-7000-8000-000000000001
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Category'
+
+    CategoryOk:
+      description: Data kategori terbaru
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Category'
+
+    MenuCreated:
+      description: Menu berhasil dibuat
+      headers:
+        Location:
+          description: URL menu yang baru dibuat
+          schema:
+            type: string
+            format: uri-reference
+          example: /v1/menus/0199f3a2-0000-7000-8000-000000000101
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Menu'
+
+    MenuOk:
+      description: Data menu terbaru
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Menu'
+
+    ValidationError:
+      description: Format request atau validasi field salah
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ValidationProblem'
+          example:
+            type: https://api.coffeeshop.com/errors/validation-error
+            title: Request tidak valid
+            status: 400
+            detail: Terdapat 1 field yang tidak valid
+            instance: /v1/menus
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            errors:
+              - pointer: '#/price/amount'
+                detail: harus berformat angka dengan 2 desimal
+
+    Unauthorized:
+      description: Token tidak ada, tidak valid, atau kedaluwarsa
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer error="invalid_token"
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/unauthorized
+            title: Autentikasi dibutuhkan
+            status: 401
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    Forbidden:
+      description: Role tidak diizinkan melakukan aksi ini
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            role:
+              summary: Role tidak diizinkan
+              value:
+                type: https://api.coffeeshop.com/errors/forbidden
+                title: Akses ditolak
+                status: 403
+                detail: Role Anda tidak diizinkan melakukan aksi ini
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            station:
+              summary: Station tidak sesuai role
+              value:
+                type: https://api.coffeeshop.com/errors/forbidden
+                title: Akses ditolak
+                status: 403
+                detail: Barista hanya boleh mengubah menu dengan station BAR
+                instance: /v1/menus/0199f3a2-0000-7000-8000-000000000201/availability
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    CategoryNotFound:
+      description: Kategori tidak ditemukan
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/category-not-found
+            title: Kategori tidak ditemukan
+            status: 404
+            detail: Kategori dengan id 0199f3a0-0000-7000-8000-000000000001 tidak ditemukan
+            instance: /v1/categories/0199f3a0-0000-7000-8000-000000000001
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    MenuNotFound:
+      description: Menu tidak ditemukan atau sudah dihapus
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/menu-not-found
+            title: Menu tidak ditemukan
+            status: 404
+            detail: Menu dengan id 0199f3a2-0000-7000-8000-000000000101 tidak ditemukan
+            instance: /v1/menus/0199f3a2-0000-7000-8000-000000000101
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    CategoryNameConflict:
+      description: Nama kategori sudah dipakai
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/category-name-conflict
+            title: Nama kategori sudah dipakai
+            status: 409
+            detail: Kategori dengan nama "Kopi" sudah ada
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    CategoryNotEmpty:
+      description: Kategori masih memiliki menu aktif
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/category-not-empty
+            title: Kategori masih memiliki menu
+            status: 409
+            detail: Kategori "Kopi" masih memiliki 8 menu aktif
+            instance: /v1/categories/0199f3a0-0000-7000-8000-000000000001
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    MenuNameConflict:
+      description: Nama menu sudah dipakai
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/menu-name-conflict
+            title: Nama menu sudah dipakai
+            status: 409
+            detail: Menu dengan nama "Caffe Latte" sudah ada
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    UnknownCategory:
+      description: categoryId di body tidak ditemukan
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/unknown-category
+            title: Kategori tidak dikenal
+            status: 422
+            detail: Kategori dengan id 0199f3a0-0000-7000-8000-000000000999 tidak ditemukan
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736

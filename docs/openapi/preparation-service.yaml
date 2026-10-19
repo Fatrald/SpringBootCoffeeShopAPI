@@ -1,0 +1,523 @@
+openapi: 3.1.0
+
+info:
+  title: CoffeeShop Preparation Service API
+  version: 1.0.0
+  description: |
+    API untuk barista dan chef memproses tiket pesanan.
+
+    Tiket **tidak dibuat lewat API**. Tiket dibuat otomatis saat event
+    `order.created` diterima: satu tiket per station per order. Order berisi
+    Caffe Latte dan Croissant menghasilkan satu tiket `BAR` dan satu tiket `KITCHEN`.
+
+    **Autentikasi:** semua endpoint membutuhkan JWT dari Keycloak realm `coffeeshop`.
+
+    **Format standar:**
+    - ID: UUID v7
+    - Tanggal: ISO 8601 UTC
+    - Error: RFC 9457 Problem Details
+
+    **Status tiket:**
+
+    | Dari          | Ke            | Pemicu                                    |
+    |---------------|---------------|-------------------------------------------|
+    | `QUEUED`      | `IN_PROGRESS` | Barista/chef (`/start`)                   |
+    | `IN_PROGRESS` | `DONE`        | Barista/chef (`/finish`)                  |
+    | `QUEUED`      | `CANCELLED`   | SISTEM (event `order.cancelled`)          |
+    | `IN_PROGRESS` | `CANCELLED`   | SISTEM (event `order.cancelled` terlambat)|
+
+    Transisi lain tidak valid → 409 Conflict. `DONE` dan `CANCELLED` adalah status final.
+
+    **Aturan station:**
+    - `barista` hanya bisa melihat dan memproses tiket `BAR`.
+    - `chef` hanya bisa melihat dan memproses tiket `KITCHEN`.
+    - `admin` bisa melihat semua tiket, tetapi tidak memprosesnya.
+
+    **Rate limit:** diterapkan di API Gateway. Jika terlampaui, gateway
+    mengembalikan `429 Too Many Requests` dengan header `Retry-After`.
+
+servers:
+  - url: https://api.coffeeshop.local
+    description: Melalui API Gateway (APISIX)
+  - url: http://localhost:8083
+    description: Langsung ke service (development)
+
+tags:
+  - name: Tickets
+    description: Antrean tiket per station (BAR / KITCHEN)
+
+security:
+  - bearerAuth: []
+
+# =====================================================================
+# PATHS
+# =====================================================================
+paths:
+
+  /v1/tickets:
+    get:
+      tags: [Tickets]
+      operationId: listTickets
+      summary: Melihat antrean tiket
+      description: |
+        **Role:** `barista`, `chef`, `admin`
+
+        - Jika `station` tidak diisi, server memakai station sesuai role:
+          barista → `BAR`, chef → `KITCHEN`, admin → semua.
+        - Jika `station` diisi dengan station yang bukan haknya
+          (misalnya barista meminta `KITCHEN`), server menolak dengan **403**,
+          bukan diam-diam mengganti filternya.
+        - Diurutkan dari yang paling lama menunggu (FIFO).
+      parameters:
+        - $ref: '#/components/parameters/StationFilter'
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/OrderIdFilter'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/TicketSort'
+      responses:
+        '200':
+          description: Daftar tiket
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/tickets/{ticketId}:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    get:
+      tags: [Tickets]
+      operationId: getTicket
+      summary: Melihat detail tiket
+      description: |
+        **Role:** `barista` (tiket BAR), `chef` (tiket KITCHEN), `admin`
+      responses:
+        '200':
+          $ref: '#/components/responses/TicketOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/TicketNotFound'
+
+  /v1/tickets/{ticketId}/start:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      operationId: startTicket
+      summary: Mulai mengerjakan tiket
+      description: |
+        **Role:** `barista` (tiket BAR), `chef` (tiket KITCHEN)
+
+        Hanya bisa dilakukan saat status `QUEUED`. Jika dua barista menekan
+        start pada tiket yang sama, hanya satu yang berhasil; yang lain
+        mendapat 409.
+
+        Setelah berhasil, service mengirim event `ticket.started`, yang
+        membuat order berubah menjadi `IN_PREPARATION`.
+      responses:
+        '200':
+          $ref: '#/components/responses/TicketOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/TicketNotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTicketState'
+
+  /v1/tickets/{ticketId}/finish:
+    parameters:
+      - $ref: '#/components/parameters/TicketId'
+    post:
+      tags: [Tickets]
+      operationId: finishTicket
+      summary: Menyelesaikan tiket
+      description: |
+        **Role:** `barista` (tiket BAR), `chef` (tiket KITCHEN)
+
+        Hanya bisa dilakukan saat status `IN_PROGRESS`.
+
+        Setelah berhasil, service mengirim event `ticket.completed`.
+        Jika semua tiket dalam order sudah `DONE`, order berubah menjadi `READY`.
+      responses:
+        '200':
+          $ref: '#/components/responses/TicketOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/TicketNotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTicketState'
+
+# =====================================================================
+# COMPONENTS
+# =====================================================================
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token dari Keycloak realm `coffeeshop`
+
+  # -------------------------------------------------------------------
+  # Parameters
+  # -------------------------------------------------------------------
+  parameters:
+    TicketId:
+      name: ticketId
+      in: path
+      required: true
+      description: ID tiket (UUID v7)
+      schema:
+        type: string
+        format: uuid
+      example: '0199f3a3-0000-7000-8000-000000000001'
+
+    StationFilter:
+      name: station
+      in: query
+      required: false
+      description: |
+        Filter station. Jika tidak diisi, server memakai station sesuai role.
+      schema:
+        $ref: '#/components/schemas/Station'
+
+    StatusFilter:
+      name: status
+      in: query
+      required: false
+      description: |
+        Filter status, boleh lebih dari satu: `?status=QUEUED&status=IN_PROGRESS`.
+        Jika tidak diisi, hanya tiket aktif (`QUEUED` dan `IN_PROGRESS`) yang ditampilkan.
+      style: form
+      explode: true
+      schema:
+        type: array
+        items:
+          $ref: '#/components/schemas/TicketStatus'
+
+    OrderIdFilter:
+      name: orderId
+      in: query
+      required: false
+      description: Filter tiket milik order tertentu
+      schema:
+        type: string
+        format: uuid
+
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Nomor halaman, dimulai dari 0
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Jumlah data per halaman
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    TicketSort:
+      name: sort
+      in: query
+      required: false
+      description: Urutan data dengan format `field,arah`
+      schema:
+        type: string
+        enum: ['createdAt,asc', 'createdAt,desc']
+        default: 'createdAt,asc'
+
+  # -------------------------------------------------------------------
+  # Schemas
+  # -------------------------------------------------------------------
+  schemas:
+
+    Ticket:
+      type: object
+      required: [ticketId, orderId, station, status, items, startedBy, finishedBy, createdAt, startedAt, finishedAt, updatedAt]
+      properties:
+        ticketId:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        station:
+          $ref: '#/components/schemas/Station'
+        status:
+          $ref: '#/components/schemas/TicketStatus'
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/TicketItem'
+        startedBy:
+          type: [string, 'null']
+          format: uuid
+          description: Barista/chef yang memulai tiket
+        finishedBy:
+          type: [string, 'null']
+          format: uuid
+          description: Barista/chef yang menyelesaikan tiket
+        createdAt:
+          type: string
+          format: date-time
+          description: Waktu tiket masuk antrean
+        startedAt:
+          type: [string, 'null']
+          format: date-time
+        finishedAt:
+          type: [string, 'null']
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        ticketId: '0199f3a3-0000-7000-8000-000000000001'
+        orderId: '0199f3a2-7c1e-7b4d-9a2f-5e8c1d3b6a40'
+        station: BAR
+        status: IN_PROGRESS
+        items:
+          - menuId: '0199f3a2-0000-7000-8000-000000000101'
+            menuName: Caffe Latte
+            quantity: 2
+        startedBy: '0199f3a1-2222-7aaa-8bbb-000000000001'
+        finishedBy: null
+        createdAt: '2026-10-19T08:00:01Z'
+        startedAt: '2026-10-19T08:02:00Z'
+        finishedAt: null
+        updatedAt: '2026-10-19T08:02:00Z'
+
+    TicketItem:
+      type: object
+      required: [menuId, menuName, quantity]
+      properties:
+        menuId:
+          type: string
+          format: uuid
+        menuName:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 50
+
+    TicketStatus:
+      type: string
+      enum: [QUEUED, IN_PROGRESS, DONE, CANCELLED]
+
+    Station:
+      type: string
+      enum: [BAR, KITCHEN]
+
+    TicketPage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Ticket'
+        page:
+          $ref: '#/components/schemas/PageMetadata'
+
+    PageMetadata:
+      type: object
+      required: [number, size, totalElements, totalPages]
+      properties:
+        number:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          example: 12
+        totalPages:
+          type: integer
+          example: 1
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Identitas error yang stabil. Klien boleh membuat logika berdasarkan field ini.
+        title:
+          type: string
+          description: Ringkasan singkat untuk manusia
+        status:
+          type: integer
+        detail:
+          type: string
+          description: Penjelasan spesifik untuk kejadian ini
+        instance:
+          type: string
+          format: uri-reference
+        traceId:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+
+    ValidationProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                required: [pointer, detail]
+                properties:
+                  pointer:
+                    type: string
+                    description: Lokasi parameter atau field yang salah
+                    example: 'status'
+                  detail:
+                    type: string
+                    example: nilai tidak dikenal
+
+  # -------------------------------------------------------------------
+  # Responses
+  # -------------------------------------------------------------------
+  responses:
+
+    TicketOk:
+      description: Data tiket terbaru
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Ticket'
+
+    ValidationError:
+      description: Format request atau parameter salah
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ValidationProblem'
+          example:
+            type: https://api.coffeeshop.com/errors/validation-error
+            title: Request tidak valid
+            status: 400
+            detail: Terdapat 1 parameter yang tidak valid
+            instance: /v1/tickets
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            errors:
+              - pointer: 'status'
+                detail: nilai tidak dikenal
+
+    Unauthorized:
+      description: Token tidak ada, tidak valid, atau kedaluwarsa
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer error="invalid_token"
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/unauthorized
+            title: Autentikasi dibutuhkan
+            status: 401
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    Forbidden:
+      description: Role atau station tidak diizinkan
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            role:
+              summary: Role tidak diizinkan
+              value:
+                type: https://api.coffeeshop.com/errors/forbidden
+                title: Akses ditolak
+                status: 403
+                detail: Role Anda tidak diizinkan melakukan aksi ini
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            station:
+              summary: Station tidak sesuai role
+              value:
+                type: https://api.coffeeshop.com/errors/forbidden
+                title: Akses ditolak
+                status: 403
+                detail: Barista hanya boleh mengakses tiket dengan station BAR
+                instance: /v1/tickets
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    TicketNotFound:
+      description: Tiket tidak ditemukan
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/ticket-not-found
+            title: Tiket tidak ditemukan
+            status: 404
+            detail: Tiket dengan id 0199f3a3-0000-7000-8000-000000000001 tidak ditemukan
+            instance: /v1/tickets/0199f3a3-0000-7000-8000-000000000001
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    InvalidTicketState:
+      description: Transisi status tidak valid untuk kondisi tiket saat ini
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            alreadyStarted:
+              summary: Tiket sudah dimulai orang lain
+              value:
+                type: https://api.coffeeshop.com/errors/invalid-ticket-state
+                title: Status tiket tidak valid
+                status: 409
+                detail: Tiket tidak bisa berubah dari IN_PROGRESS ke IN_PROGRESS
+                instance: /v1/tickets/0199f3a3-0000-7000-8000-000000000001/start
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            cancelled:
+              summary: Order sudah dibatalkan
+              value:
+                type: https://api.coffeeshop.com/errors/invalid-ticket-state
+                title: Status tiket tidak valid
+                status: 409
+                detail: Tiket sudah dibatalkan karena order dibatalkan
+                instance: /v1/tickets/0199f3a3-0000-7000-8000-000000000001/start
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736

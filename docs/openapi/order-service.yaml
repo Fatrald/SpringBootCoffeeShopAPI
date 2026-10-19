@@ -1,0 +1,654 @@
+openapi: 3.1.0
+
+info:
+  title: CoffeeShop Order Service API
+  version: 1.0.0
+  description: |
+    API untuk membuat dan mengelola order di CoffeeShop.
+
+    **Autentikasi:** semua endpoint membutuhkan JWT dari Keycloak realm `coffeeshop`.
+
+    **Format standar:**
+    - ID: UUID v7
+    - Tanggal: ISO 8601 UTC
+    - Uang: decimal sebagai string
+    - Error: RFC 9457 Problem Details
+
+    **Rate limit:** diterapkan di API Gateway. Jika terlampaui, gateway
+    mengembalikan `429 Too Many Requests` dengan header `Retry-After`.
+
+servers:
+  - url: https://api.coffeeshop.local
+    description: Melalui API Gateway (APISIX)
+  - url: http://localhost:8082
+    description: Langsung ke service (development)
+
+tags:
+  - name: Orders
+    description: Membuat, melihat, dan mengubah status order
+
+security:
+  - bearerAuth: []
+
+# =====================================================================
+# PATHS
+# =====================================================================
+paths:
+
+  /v1/orders:
+    post:
+      tags: [Orders]
+      operationId: placeOrder
+      summary: Customer membuat order
+      description: |
+        **Role:** `customer`
+
+        - `customerId` diambil dari token (claim `sub`), bukan dari body.
+        - Harga diambil dari menu-service. Klien tidak mengirim harga.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        $ref: '#/components/requestBodies/PlaceOrder'
+      responses:
+        '201':
+          $ref: '#/components/responses/OrderCreated'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInProgress'
+        '422':
+          $ref: '#/components/responses/OrderRejected'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+    get:
+      tags: [Orders]
+      operationId: listOrders
+      summary: Melihat daftar order
+      description: |
+        **Role:** `customer`, `waiter`, `admin`
+
+        - `customer` hanya mendapat order miliknya (difilter otomatis oleh server).
+        - `waiter` dan `admin` mendapat semua order.
+      parameters:
+        - $ref: '#/components/parameters/StatusFilter'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - $ref: '#/components/parameters/Sort'
+      responses:
+        '200':
+          description: Daftar order
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPage'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/orders/walk-in:
+    post:
+      tags: [Orders]
+      operationId: placeWalkInOrder
+      summary: Waiter membuat order untuk pelanggan walk-in
+      description: |
+        **Role:** `waiter`
+
+        Order walk-in tidak memiliki `customerId` (bernilai `null`).
+        `createdBy` diisi dengan ID waiter dari token.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        $ref: '#/components/requestBodies/PlaceOrder'
+      responses:
+        '201':
+          $ref: '#/components/responses/OrderCreated'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/IdempotencyInProgress'
+        '422':
+          $ref: '#/components/responses/OrderRejected'
+        '503':
+          $ref: '#/components/responses/DependencyUnavailable'
+
+  /v1/orders/{orderId}:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Melihat detail order
+      description: |
+        **Role:** `customer` (miliknya), `waiter`, `admin`,
+        dan service account dengan role `order-reader`.
+
+        Customer yang mengakses order milik orang lain mendapat **404**,
+        bukan 403, agar keberadaan order tidak bocor.
+      responses:
+        '200':
+          $ref: '#/components/responses/OrderOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+
+  /v1/orders/{orderId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      tags: [Orders]
+      operationId: cancelOrder
+      summary: Membatalkan order
+      description: |
+        **Role:** `customer` (miliknya), `waiter`, `admin`
+
+        Hanya bisa dilakukan saat status `CREATED`.
+      responses:
+        '200':
+          $ref: '#/components/responses/OrderOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+        '409':
+          $ref: '#/components/responses/InvalidOrderState'
+
+  /v1/orders/{orderId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/OrderId'
+    post:
+      tags: [Orders]
+      operationId: completeOrder
+      summary: Menyerahkan order ke pelanggan
+      description: |
+        **Role:** `waiter`
+
+        Hanya bisa dilakukan saat status `READY`.
+      responses:
+        '200':
+          $ref: '#/components/responses/OrderOk'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/OrderNotFound'
+        '409':
+          $ref: '#/components/responses/InvalidOrderState'
+
+# =====================================================================
+# COMPONENTS
+# =====================================================================
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token dari Keycloak realm `coffeeshop`
+
+  # -------------------------------------------------------------------
+  # Parameters
+  # -------------------------------------------------------------------
+  parameters:
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      description: ID order (UUID v7)
+      schema:
+        type: string
+        format: uuid
+      example: '0199f3a2-7c1e-7b4d-9a2f-5e8c1d3b6a40'
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        UUID unik untuk setiap percobaan membuat order. Jika request gagal
+        di jaringan, kirim ulang dengan key yang sama. Server akan
+        mengembalikan respons pertama tanpa membuat order baru.
+        Key berlaku selama 24 jam.
+      schema:
+        type: string
+        format: uuid
+      example: '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+
+    StatusFilter:
+      name: status
+      in: query
+      required: false
+      description: Filter berdasarkan status order
+      schema:
+        $ref: '#/components/schemas/OrderStatus'
+
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Nomor halaman, dimulai dari 0
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Jumlah data per halaman
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    Sort:
+      name: sort
+      in: query
+      required: false
+      description: Urutan data dengan format `field,arah`
+      schema:
+        type: string
+        enum: ['createdAt,desc', 'createdAt,asc']
+        default: 'createdAt,desc'
+
+  # -------------------------------------------------------------------
+  # Request bodies
+  # -------------------------------------------------------------------
+  requestBodies:
+    PlaceOrder:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PlaceOrderRequest'
+          example:
+            items:
+              - menuId: '0199f3a2-0000-7000-8000-000000000101'
+                quantity: 2
+              - menuId: '0199f3a2-0000-7000-8000-000000000201'
+                quantity: 1
+
+  # -------------------------------------------------------------------
+  # Schemas
+  # -------------------------------------------------------------------
+  schemas:
+
+    PlaceOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/PlaceOrderItem'
+
+    PlaceOrderItem:
+      type: object
+      additionalProperties: false
+      required: [menuId, quantity]
+      properties:
+        menuId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 50
+
+    Order:
+      type: object
+      required: [orderId, customerId, createdBy, status, items, totalAmount, createdAt, updatedAt]
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        customerId:
+          type: [string, 'null']
+          format: uuid
+          description: Bernilai `null` untuk order walk-in
+        createdBy:
+          type: string
+          format: uuid
+          description: User yang menginput order
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        totalAmount:
+          $ref: '#/components/schemas/Money'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        orderId: '0199f3a2-7c1e-7b4d-9a2f-5e8c1d3b6a40'
+        customerId: '0199f3a1-1111-7aaa-8bbb-000000000001'
+        createdBy: '0199f3a1-1111-7aaa-8bbb-000000000001'
+        status: CREATED
+        items:
+          - menuId: '0199f3a2-0000-7000-8000-000000000101'
+            menuName: Caffe Latte
+            quantity: 2
+            unitPrice: { amount: '35000.00', currency: IDR }
+            subtotal: { amount: '70000.00', currency: IDR }
+            station: BAR
+          - menuId: '0199f3a2-0000-7000-8000-000000000201'
+            menuName: Croissant
+            quantity: 1
+            unitPrice: { amount: '25000.00', currency: IDR }
+            subtotal: { amount: '25000.00', currency: IDR }
+            station: KITCHEN
+        totalAmount: { amount: '95000.00', currency: IDR }
+        createdAt: '2026-10-19T08:00:00Z'
+        updatedAt: '2026-10-19T08:00:00Z'
+
+    OrderItem:
+      type: object
+      required: [menuId, menuName, quantity, unitPrice, subtotal, station]
+      properties:
+        menuId:
+          type: string
+          format: uuid
+        menuName:
+          type: string
+          description: Nama menu saat order dibuat (snapshot)
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 50
+        unitPrice:
+          $ref: '#/components/schemas/Money'
+        subtotal:
+          $ref: '#/components/schemas/Money'
+        station:
+          $ref: '#/components/schemas/Station'
+
+    OrderStatus:
+      type: string
+      enum: [CREATED, IN_PREPARATION, READY, COMPLETED, CANCELLED]
+
+    Station:
+      type: string
+      enum: [BAR, KITCHEN]
+
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          pattern: '^\d+\.\d{2}$'
+          description: Decimal sebagai string untuk menghindari kesalahan pembulatan
+          example: '35000.00'
+        currency:
+          type: string
+          enum: [IDR]
+
+    OrderPage:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Order'
+        page:
+          $ref: '#/components/schemas/PageMetadata'
+
+    PageMetadata:
+      type: object
+      required: [number, size, totalElements, totalPages]
+      properties:
+        number:
+          type: integer
+          example: 0
+        size:
+          type: integer
+          example: 20
+        totalElements:
+          type: integer
+          example: 57
+        totalPages:
+          type: integer
+          example: 3
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Identitas error yang stabil. Klien boleh membuat logika berdasarkan field ini.
+        title:
+          type: string
+          description: Ringkasan singkat untuk manusia
+        status:
+          type: integer
+        detail:
+          type: string
+          description: Penjelasan spesifik untuk kejadian ini
+        instance:
+          type: string
+          format: uri-reference
+        traceId:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+
+    ValidationProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                required: [pointer, detail]
+                properties:
+                  pointer:
+                    type: string
+                    description: Lokasi field yang salah (JSON Pointer, RFC 6901)
+                    example: '#/items/0/quantity'
+                  detail:
+                    type: string
+                    example: harus antara 1 dan 50
+
+  # -------------------------------------------------------------------
+  # Responses
+  # -------------------------------------------------------------------
+  responses:
+
+    OrderCreated:
+      description: Order berhasil dibuat
+      headers:
+        Location:
+          description: URL order yang baru dibuat
+          schema:
+            type: string
+            format: uri-reference
+          example: /v1/orders/0199f3a2-7c1e-7b4d-9a2f-5e8c1d3b6a40
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Order'
+
+    OrderOk:
+      description: Data order terbaru
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Order'
+
+    ValidationError:
+      description: Format request atau validasi field salah
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ValidationProblem'
+          example:
+            type: https://api.coffeeshop.com/errors/validation-error
+            title: Request tidak valid
+            status: 400
+            detail: Terdapat 1 field yang tidak valid
+            instance: /v1/orders
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            errors:
+              - pointer: '#/items/0/quantity'
+                detail: harus antara 1 dan 50
+
+    Unauthorized:
+      description: Token tidak ada, tidak valid, atau kedaluwarsa
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+          example: Bearer error="invalid_token"
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/unauthorized
+            title: Autentikasi dibutuhkan
+            status: 401
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    Forbidden:
+      description: Role tidak diizinkan melakukan aksi ini
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/forbidden
+            title: Akses ditolak
+            status: 403
+            detail: Role Anda tidak diizinkan melakukan aksi ini
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    OrderNotFound:
+      description: Order tidak ditemukan
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/order-not-found
+            title: Order tidak ditemukan
+            status: 404
+            detail: Order dengan id 0199f3a2-7c1e-7b4d-9a2f-5e8c1d3b6a40 tidak ditemukan
+            instance: /v1/orders/0199f3a2-7c1e-7b4d-9a2f-5e8c1d3b6a40
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    InvalidOrderState:
+      description: Transisi status tidak valid untuk kondisi order saat ini
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/invalid-order-state
+            title: Status order tidak valid
+            status: 409
+            detail: Order tidak bisa berubah dari READY ke CANCELLED
+            instance: /v1/orders/0199f3a2-7c1e-7b4d-9a2f-5e8c1d3b6a40/cancel
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    IdempotencyInProgress:
+      description: Request dengan Idempotency-Key yang sama sedang diproses
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/idempotency-in-progress
+            title: Request sedang diproses
+            status: 409
+            detail: Request dengan Idempotency-Key ini masih diproses. Coba lagi beberapa saat.
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    OrderRejected:
+      description: Request valid secara format, tetapi ditolak aturan bisnis
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          examples:
+            unknownMenu:
+              summary: menuId tidak ditemukan
+              value:
+                type: https://api.coffeeshop.com/errors/unknown-menu
+                title: Menu tidak dikenal
+                status: 422
+                detail: Menu dengan id 0199f3a2-0000-7000-8000-000000000999 tidak ditemukan
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            menuUnavailable:
+              summary: Menu sedang tidak tersedia
+              value:
+                type: https://api.coffeeshop.com/errors/menu-unavailable
+                title: Menu tidak tersedia
+                status: 422
+                detail: Croissant sedang tidak tersedia
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+            idempotencyKeyReused:
+              summary: Key dipakai ulang dengan body berbeda
+              value:
+                type: https://api.coffeeshop.com/errors/idempotency-key-reused
+                title: Idempotency-Key sudah dipakai
+                status: 422
+                detail: Idempotency-Key ini sudah dipakai untuk request dengan isi berbeda
+                traceId: 4bf92f3577b34da6a3ce929d0e0e4736
+
+    DependencyUnavailable:
+      description: Service lain yang dibutuhkan sedang tidak bisa dihubungi
+      headers:
+        Retry-After:
+          description: Jumlah detik sebelum klien sebaiknya mencoba lagi
+          schema:
+            type: integer
+          example: 5
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.coffeeshop.com/errors/dependency-unavailable
+            title: Layanan sementara tidak tersedia
+            status: 503
+            detail: Data menu tidak bisa diambil. Coba lagi beberapa saat.
+            traceId: 4bf92f3577b34da6a3ce929d0e0e4736
