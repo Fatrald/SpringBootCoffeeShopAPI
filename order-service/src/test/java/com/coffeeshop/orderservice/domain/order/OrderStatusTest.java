@@ -1,9 +1,7 @@
-package com.coffeeshop.orderservice;
+package com.coffeeshop.orderservice.domain.order;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-
-import com.coffeeshop.orderservice.order.OrderStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

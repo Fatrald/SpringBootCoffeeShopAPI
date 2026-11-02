@@ -1,18 +1,17 @@
-package com.coffeeshop.orderservice.order;
+package com.coffeeshop.orderservice.domain.order;
 
 import com.coffeeshop.orderservice.domain.actor.Actor;
-import com.coffeeshop.orderservice.order.exception.InvalidOrderException;
-import com.coffeeshop.orderservice.order.exception.InvalidOrderStateTransitionException;
-import com.coffeeshop.orderservice.order.exception.OrderAccessDeniedException;
+import com.coffeeshop.orderservice.domain.order.exception.InvalidOrderException;
+import com.coffeeshop.orderservice.domain.order.exception.InvalidOrderStateTransitionException;
+import com.coffeeshop.orderservice.domain.order.exception.OrderAccessDeniedException;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-
 
 public class Order {
     private final UUID id;
@@ -23,7 +22,9 @@ public class Order {
     private final Instant createdAt;
     private Instant updatedAt;
 
-    public Order(UUID id, UUID customerId, UUID createdBy, List<OrderItem> items, Instant now) {
+    // Constructor private: satu-satunya cara membuat Order adalah lewat
+    // placeByCustomer() atau placeWalkIn(), sehingga aturan bisnis tidak bisa dilewati.
+    private Order(UUID id, UUID customerId, UUID createdBy, List<OrderItem> items, Instant now) {
         this.id = Objects.requireNonNull(id, "ID wajib diisi");
         this.customerId = customerId;
         this.createdBy = createdBy;
@@ -33,7 +34,7 @@ public class Order {
         this.orderStatus = OrderStatus.CREATED;
     }
 
-    public static void requireItems(List<OrderItem> items){
+    private static void requireItems(List<OrderItem> items){
         if (items == null || items.isEmpty()){
             throw new InvalidOrderException("Order minimal berisi 1 item");
         }

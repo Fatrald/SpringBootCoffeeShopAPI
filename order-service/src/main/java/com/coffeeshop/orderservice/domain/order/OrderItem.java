@@ -1,9 +1,9 @@
-package com.coffeeshop.orderservice.order;
+package com.coffeeshop.orderservice.domain.order;
 
 import java.math.BigDecimal;
 import java.util.UUID;
 
-import com.coffeeshop.orderservice.order.exception.InvalidOrderException;
+import com.coffeeshop.orderservice.domain.order.exception.InvalidOrderException;
 
 public record OrderItem(
         UUID menuId,

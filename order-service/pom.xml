@@ -30,29 +30,29 @@
         <java.version>25</java.version>
     </properties>
     <dependencies>
+        <!-- REST API (Spring MVC). Di Spring Boot 4 starter ini menggantikan spring-boot-starter-web. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-jpa</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-flyway</artifactId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-data-jpa-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-flyway-test</artifactId>
-            <scope>test</scope>
-        </dependency>
+        <!-- Pembuat UUID v7. Versinya tidak dikelola Spring Boot, jadi ditulis manual. -->
         <dependency>
             <groupId>com.fasterxml.uuid</groupId>
             <artifactId>java-uuid-generator</artifactId>
             <version>5.2.0</version>
+        </dependency>
+
+        <!--
+            JPA dan Flyway sengaja BELUM ditambahkan. Keduanya membutuhkan konfigurasi
+            datasource, dan aplikasi gagal start tanpa konfigurasi itu. Ditambahkan di Step 6:
+              spring-boot-starter-data-jpa, spring-boot-starter-flyway, postgresql
+        -->
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

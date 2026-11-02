@@ -1,6 +1,5 @@
-package com.coffeeshop.orderservice;
+package com.coffeeshop.orderservice.infrastructure.id;
 
-import com.coffeeshop.orderservice.infrastructure.id.UuidV7Generator;
 import org.junit.jupiter.api.Test;
 
 import java.util.UUID;

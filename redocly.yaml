@@ -4,4 +4,4 @@ extends:
 rules:
   info-license: off
   operation-4xx-response: error
-  no-server-example: off
+  no-server-example.com: off   # server localhost memang sengaja untuk development

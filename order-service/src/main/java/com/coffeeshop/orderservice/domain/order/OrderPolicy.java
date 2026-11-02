@@ -1,4 +1,4 @@
-package com.coffeeshop.orderservice.order;
+package com.coffeeshop.orderservice.domain.order;
 
 import com.coffeeshop.orderservice.domain.actor.Actor;
 import com.coffeeshop.orderservice.domain.actor.Role;

@@ -10,19 +10,20 @@ public enum Role {
     CHEF("chef"),
     ADMIN("admin");
 
-    /// this is role from keycloak
+    /// Nama realm role di Keycloak (claim `realm_access.roles`).
     private final String keycloakRole;
 
-    /// this is constructor for ROLE
     Role(String keycloakRole) {
         this.keycloakRole = keycloakRole;
     }
 
-    public String getKeycloakRole(){
+    public String keycloakRole() {
         return keycloakRole;
     }
 
-    public static Optional<Role> fromKeycloakRole(String name){
+    /// Role bawaan Keycloak yang tidak dikenal (misalnya `offline_access`)
+    /// menghasilkan `Optional.empty()` dan cukup diabaikan.
+    public static Optional<Role> fromKeycloakRole(String name) {
         return Arrays.stream(values())
                 .filter(role -> role.keycloakRole.equals(name))
                 .findFirst();

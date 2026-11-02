@@ -1,14 +1,10 @@
-package com.coffeeshop.orderservice;
+package com.coffeeshop.orderservice.domain.order;
 
 import com.coffeeshop.orderservice.domain.actor.Actor;
 import com.coffeeshop.orderservice.domain.actor.Role;
-import com.coffeeshop.orderservice.order.Order;
-import com.coffeeshop.orderservice.order.OrderItem;
-import com.coffeeshop.orderservice.order.OrderStatus;
-import com.coffeeshop.orderservice.order.Station;
-import com.coffeeshop.orderservice.order.exception.InvalidOrderException;
-import com.coffeeshop.orderservice.order.exception.InvalidOrderStateTransitionException;
-import com.coffeeshop.orderservice.order.exception.OrderAccessDeniedException;
+import com.coffeeshop.orderservice.domain.order.exception.InvalidOrderException;
+import com.coffeeshop.orderservice.domain.order.exception.InvalidOrderStateTransitionException;
+import com.coffeeshop.orderservice.domain.order.exception.OrderAccessDeniedException;
 
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
